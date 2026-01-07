@@ -1,0 +1,32 @@
+# LensDB Configuration File
+# This is the default configuration for Docker deployments
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  max_connections: 1000
+  connection_timeout: 300
+  buffer_size: 4096
+  workers: 4
+
+storage:
+  max_memory: "512MB"
+  max_keys: 0
+  cleanup_interval: 300
+  compaction_threshold: 0.8
+  eviction_policy: "LRU"
+
+logging:
+  level: "info"
+  file: "/logs/lensdb.log"
+  max_size: "100MB"
+  backup_count: 5
+  format: "text"
+
+persistence:
+  enabled: true
+  data_dir: "/data"
+  sync_interval: 60
+  compression: false
+  backup_enabled: true
+  backup_interval: 3600

@@ -1,0 +1,56 @@
+[Unit]
+Description=LensDB - High-performance NoSQL key-value database
+Documentation=https://github.com/yourusername/lensdb
+After=network.target
+Wants=network.target
+
+[Service]
+# User and group to run the service as
+User=lensdb
+Group=lensdb
+
+# Main executable
+ExecStart=/usr/local/bin/lensdb-server --config /etc/lensdb/lensdb.yaml
+
+# Reload configuration
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Restart policy
+Restart=always
+RestartSec=5
+
+# Working directory
+WorkingDirectory=/var/lib/lensdb
+
+# Environment variables
+Environment=LENSDB_CONFIG_FILE=/etc/lensdb/lensdb.yaml
+Environment=LENSDB_DATA_DIR=/var/lib/lensdb/data
+Environment=LENSDB_LOG_FILE=/var/log/lensdb/lensdb.log
+Environment=LENSDB_HOST=127.0.0.1
+Environment=LENSDB_PORT=8080
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/lensdb /var/log/lensdb /var/run/lensdb
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Process settings
+PIDFile=/var/run/lensdb/lensdb.pid
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lensdb
+
+# Timeout settings
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
