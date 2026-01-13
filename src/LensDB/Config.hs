@@ -37,6 +37,7 @@ module LensDB.Config
   )
 where
 
+import Control.Monad (when)
 import Data.Aeson (FromJSON, ToJSON, eitherDecodeFileStrict, encodeFile)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BS
@@ -368,9 +369,6 @@ validateConfig Config {..} = do
     Left "Persistence backup interval must be positive"
 
   return ()
-  where
-    when True _ = Right ()
-    when False _ = Left ""
 
 -- | Merge two configurations (second overrides first)
 mergeConfig :: Config -> Config -> Config

@@ -495,6 +495,100 @@ debugConfig :: DatabaseConfig
 debugConfig = defaultDatabaseConfig { dbLogLevel = "debug" }
 ```
 
+## Python Client Implementation
+
+### Complete Example Implementation
+
+A complete, production-ready Python client implementation is available in the `examples/` directory:
+
+- **`examples/python_client_example.py`** - Full client implementation with protocol handling
+- **`examples/README.md`** - Detailed usage instructions and protocol specification
+
+### Quick Start
+
+```python
+from examples.python_client_example import LensDBClient
+
+# Connect to LensDB server
+with LensDBClient(host='127.0.0.1', port=8080) as client:
+    # Basic operations
+    client.set('user:1', b'{"name": "Alice", "age": 30}')
+    value = client.get('user:1')
+    print(value)  # b'{"name": "Alice", "age": 30}'
+    
+    # Set with expiration
+    client.setex('session:abc123', b'user_data', 3600)
+    
+    # Check existence
+    exists = client.exists('user:1')
+    print(exists)  # True
+    
+    # Delete
+    client.delete('user:1')
+```
+
+### Real-world Example
+
+```python
+import json
+from examples.python_client_example import LensDBClient
+
+class UserCache:
+    def __init__(self, host='127.0.0.1', port=8080):
+        self.client = LensDBClient(host=host, port=port)
+        self.client.connect()
+    
+    def cache_user(self, user_id, user_data, ttl=3600):
+        """Cache user data with TTL"""
+        key = f'user:{user_id}'
+        value = json.dumps(user_data).encode('utf-8')
+        self.client.setex(key, value, ttl)
+    
+    def get_user(self, user_id):
+        """Get cached user data"""
+        key = f'user:{user_id}'
+        value = self.client.get(key)
+        if value:
+            return json.loads(value.decode('utf-8'))
+        return None
+    
+    def close(self):
+        self.client.disconnect()
+
+# Usage
+cache = UserCache()
+try:
+    cache.cache_user(123, {'name': 'Alice', 'email': 'alice@example.com'})
+    user = cache.get_user(123)
+    print(user)  # {'name': 'Alice', 'email': 'alice@example.com'}
+finally:
+    cache.close()
+```
+
+### Protocol Implementation
+
+The example includes a complete implementation of the LensDB binary protocol:
+
+- **Message serialization/deserialization**
+- **Network communication**
+- **Error handling and retries**
+- **Connection management**
+- **Context manager support**
+
+See `examples/python_client_example.py` for the full implementation and `examples/README.md` for detailed documentation.
+
+### Building Your Own Library
+
+Use the example implementation as a foundation for your own LensDB client library. The example demonstrates:
+
+1. **Binary Protocol**: Complete protocol implementation
+2. **Error Handling**: Proper exception hierarchy
+3. **Connection Management**: Automatic cleanup and reconnection
+4. **Performance**: Efficient serialization and buffering
+5. **Testing**: Comprehensive test examples
+
+For advanced features like connection pooling, async support, and serialization helpers, see the "Building a Production Library" section in `examples/README.md`.
+
 ## Support
 
 - **GitHub Repository**: <https://github.com/C0dWiz/lensdb>

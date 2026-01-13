@@ -23,12 +23,14 @@ module LensDB.Core
     newKVStoreWithLimits,
     get,
     set,
+    setWithExpiry,
     delete,
     exists,
     keys,
     size,
     currentStorageSize,
     clear,
+    cleanupExpired,
 
     -- * Transaction Operations
     atomically,
@@ -41,10 +43,11 @@ import Control.Exception (Exception, SomeException, bracket, catch, finally, thr
 import Control.Monad (unless, when)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import Data.HashMap.Strict (HashMap)
+import qualified Data.HashMap.Strict as HashMap
 import Data.Hashable (Hashable)
-import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime, getCurrentTime)
+import Data.Word (Word32)
 import GHC.Generics (Generic)
 
 -- | Represents a key-value pair with metadata
@@ -56,7 +59,9 @@ data KeyValue = KeyValue
     -- | Timestamp of last access
     kvAccessed :: !UTCTime,
     -- | Size of the value in bytes
-    kvSize :: !Int
+    kvSize :: !Int,
+    -- | Expiration time (Nothing = no expiration)
+    kvExpires :: !(Maybe UTCTime)
   }
   deriving (Show, Eq, Generic)
 
@@ -75,7 +80,7 @@ data StorageError
 -- | Thread-safe in-memory key-value store
 data KVStore = KVStore
   { -- | The main storage map
-    kvData :: !(TVar (Map ByteString KeyValue)),
+    kvData :: !(TVar (HashMap ByteString KeyValue)),
     -- | Maximum size in bytes (0 = unlimited)
     kvMaxSize :: !(TVar Int),
     -- | Current storage usage in bytes
@@ -94,7 +99,7 @@ data KVStore = KVStore
 -- 0
 newKVStore :: IO KVStore
 newKVStore = do
-  dataVar <- newTVarIO Map.empty
+  dataVar <- newTVarIO HashMap.empty
   maxSizeVar <- newTVarIO 0 -- 0 means unlimited
   currentSizeVar <- newTVarIO 0
   maxKeysVar <- newTVarIO 0 -- 0 means unlimited
@@ -116,7 +121,7 @@ newKVStoreWithLimits ::
   Int ->
   IO KVStore
 newKVStoreWithLimits memLimit keyLimit = do
-  dataVar <- newTVarIO Map.empty
+  dataVar <- newTVarIO HashMap.empty
   maxSizeVar <- newTVarIO memLimit
   currentSizeVar <- newTVarIO 0
   maxKeysVar <- newTVarIO keyLimit
@@ -129,6 +134,32 @@ newKVStoreWithLimits memLimit keyLimit = do
         kvMaxKeys = maxKeysVar,
         kvKeyCount = keyCountVar
       }
+
+-- | Check if a key is expired
+isExpired :: UTCTime -> KeyValue -> Bool
+isExpired now KeyValue {..} =
+  case kvExpires of
+    Nothing -> False
+    Just expiry -> now >= expiry
+
+-- | Clean up expired keys (lazy cleanup)
+cleanupExpired :: KVStore -> IO Int
+cleanupExpired store@KVStore {..} = do
+  now <- getCurrentTime
+  atomically $ do
+    dataMap <- readTVar kvData
+    let expiredKeys = [k | (k, kv) <- HashMap.toList dataMap, isExpired now kv]
+    if null expiredKeys
+      then return 0
+      else do
+        let updatedMap = HashMap.filter (not . isExpired now) dataMap
+        writeTVar kvData updatedMap
+        -- Update size and key count
+        let expiredCount = length expiredKeys
+            expiredSize = sum $ map kvSize $ map (dataMap HashMap.!) expiredKeys
+        modifyTVar kvCurrentSize (subtract expiredSize)
+        modifyTVar kvKeyCount (subtract expiredCount)
+        return expiredCount
 
 -- | Validate a key (must be non-empty and reasonable length)
 validateKey :: ByteString -> Either StorageError ()
@@ -151,13 +182,21 @@ get store@KVStore {..} key = do
       now <- getCurrentTime
       result <- atomically $ do
         dataMap <- readTVar kvData
-        case Map.lookup key dataMap of
+        case HashMap.lookup key dataMap of
           Nothing -> return $ Left $ KeyNotFound key
-          Just kv@KeyValue {..} -> do
-            -- Update access time
-            let updatedKV = kv {kvAccessed = now}
-            modifyTVar kvData (Map.insert key updatedKV)
-            return $ Right kvValue
+          Just kv@KeyValue {..} ->
+            if isExpired now kv
+              then do
+                -- Remove expired key and return not found
+                modifyTVar kvData (HashMap.delete key)
+                modifyTVar kvCurrentSize (subtract kvSize)
+                modifyTVar kvKeyCount (subtract 1)
+                return $ Left $ KeyNotFound key
+              else do
+                -- Update access time
+                let updatedKV = kv {kvAccessed = now}
+                modifyTVar kvData (HashMap.insert key updatedKV)
+                return $ Right kvValue
       return result
 
 -- | Set a value for a key
@@ -177,7 +216,8 @@ set store@KVStore {..} key value = do
               { kvValue = value,
                 kvCreated = now,
                 kvAccessed = now,
-                kvSize = valueSize
+                kvSize = valueSize,
+                kvExpires = Nothing
               }
 
       result <- atomically $ do
@@ -189,12 +229,12 @@ set store@KVStore {..} key value = do
 
         -- Check if key already exists
         dataMap <- readTVar kvData
-        let existingSize = case Map.lookup key dataMap of
+        let existingSize = case HashMap.lookup key dataMap of
               Nothing -> 0
               Just kv -> kvSize kv
             sizeDelta = valueSize - existingSize
             newTotalSize = currentSize + sizeDelta
-            newKeyCount = if Map.member key dataMap then keyCount else keyCount + 1
+            newKeyCount = if HashMap.member key dataMap then keyCount else keyCount + 1
 
         -- Validate limits
         when (maxSize > 0 && newTotalSize > maxSize) $
@@ -203,9 +243,61 @@ set store@KVStore {..} key value = do
           retrySTM
 
         -- Update storage
-        modifyTVar kvData (Map.insert key newKV)
+        modifyTVar kvData (HashMap.insert key newKV)
         modifyTVar kvCurrentSize (+ sizeDelta)
-        unless (Map.member key dataMap) $
+        unless (HashMap.member key dataMap) $
+          modifyTVar kvKeyCount (+ 1)
+
+        return $ Right ()
+
+      return result
+  where
+    retrySTM = retry
+
+-- | Set a value for a key with expiration time in seconds
+setWithExpiry :: KVStore -> ByteString -> ByteString -> Word32 -> IO (Either StorageError ())
+setWithExpiry store@KVStore {..} key value ttlSeconds = do
+  case validateKey key of
+    Left err -> return $ Left err
+    Right _ -> do
+      now <- getCurrentTime
+      let valueSize = BS.length value
+          expiryTime = Just $ addUTCTime (fromIntegral ttlSeconds) now
+          newKV =
+            KeyValue
+              { kvValue = value,
+                kvCreated = now,
+                kvAccessed = now,
+                kvSize = valueSize,
+                kvExpires = expiryTime
+              }
+
+      result <- atomically $ do
+        -- Check limits
+        maxSize <- readTVar kvMaxSize
+        maxKeys <- readTVar kvMaxKeys
+        currentSize <- readTVar kvCurrentSize
+        keyCount <- readTVar kvKeyCount
+
+        -- Check if key already exists
+        dataMap <- readTVar kvData
+        let existingSize = case HashMap.lookup key dataMap of
+              Nothing -> 0
+              Just kv -> kvSize kv
+            sizeDelta = valueSize - existingSize
+            newTotalSize = currentSize + sizeDelta
+            newKeyCount = if HashMap.member key dataMap then keyCount else keyCount + 1
+
+        -- Validate limits
+        when (maxSize > 0 && newTotalSize > maxSize) $
+          retrySTM
+        when (maxKeys > 0 && newKeyCount > maxKeys) $
+          retrySTM
+
+        -- Update storage
+        modifyTVar kvData (HashMap.insert key newKV)
+        modifyTVar kvCurrentSize (+ sizeDelta)
+        unless (HashMap.member key dataMap) $
           modifyTVar kvKeyCount (+ 1)
 
         return $ Right ()
@@ -227,10 +319,10 @@ delete store@KVStore {..} key = do
     Right _ -> do
       result <- atomically $ do
         dataMap <- readTVar kvData
-        case Map.lookup key dataMap of
+        case HashMap.lookup key dataMap of
           Nothing -> return $ Left $ KeyNotFound key
           Just KeyValue {..} -> do
-            modifyTVar kvData (Map.delete key)
+            modifyTVar kvData (HashMap.delete key)
             modifyTVar kvCurrentSize (subtract kvSize)
             modifyTVar kvKeyCount (subtract 1)
             return $ Right ()
@@ -248,7 +340,7 @@ exists KVStore {..} key = do
     Left _ -> return False
     Right _ -> do
       dataMap <- readTVarIO kvData
-      return $ Map.member key dataMap
+      return $ HashMap.member key dataMap
 
 -- | Get all keys in the store
 --
@@ -260,7 +352,7 @@ exists KVStore {..} key = do
 keys :: KVStore -> IO [ByteString]
 keys KVStore {..} = do
   dataMap <- readTVarIO kvData
-  return $ Map.keys dataMap
+  return $ HashMap.keys dataMap
 
 -- | Get the number of stored key-value pairs
 --
@@ -283,7 +375,7 @@ currentStorageSize KVStore {..} = readTVarIO kvCurrentSize
 -- 0
 clear :: KVStore -> IO ()
 clear KVStore {..} = atomically $ do
-  writeTVar kvData Map.empty
+  writeTVar kvData HashMap.empty
   writeTVar kvCurrentSize 0
   writeTVar kvKeyCount 0
 

@@ -53,9 +53,9 @@ import Data.Bits (shiftL, shiftR, (.|.))
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
+import Data.HashMap.Strict (HashMap)
+import qualified Data.HashMap.Strict as HashMap
 import Data.List (sortBy)
-import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
 import Data.Time (UTCTime (..), addUTCTime, defaultTimeLocale, formatTime, fromGregorian, getCurrentTime, secondsToDiffTime, toGregorian, utctDay, utctDayTime)
 import Data.Word (Word32, Word64)
 import GHC.Generics (Generic)
@@ -124,13 +124,13 @@ instance Binary UTCTime where
 
 -- | Snapshot of the database state
 data Snapshot = Snapshot
-  { -- | When the snapshot was created
-    snapTimestamp :: !UTCTime,
-    -- | Snapshot version
+  { -- | Snapshot version
     snapVersion :: !Word32,
-    -- | The actual key-value data
-    snapData :: !(Map ByteString KeyValue),
-    -- | Checksum for integrity verification
+    -- | Snapshot timestamp
+    snapTimestamp :: !UTCTime,
+    -- | Snapshot data
+    snapData :: !(HashMap ByteString KeyValue),
+    -- | Data checksum
     snapChecksum :: !Word32
   }
   deriving (Show, Eq, Generic)
@@ -173,13 +173,29 @@ instance Binary KeyValue where
     put kvCreated
     put kvAccessed
     put kvSize
+    put kvExpires
 
   get = do
     kvValue <- get
     kvCreated <- get
     kvAccessed <- get
     kvSize <- get
+    kvExpires <- get
     return KeyValue {..}
+
+instance Binary (HashMap ByteString KeyValue) where
+  put hashMap = do
+    let entries = HashMap.toList hashMap
+    put (length entries)
+    mapM_ (\(k, v) -> put k >> put v) entries
+  
+  get = do
+    numEntries <- get
+    entries <- replicateM numEntries $ do
+      key <- get
+      value <- get
+      return (key, value)
+    return $ HashMap.fromList entries
 
 -- | Persistence manager state
 data PersistenceManager = PersistenceManager
@@ -263,7 +279,7 @@ backupWorker manager@PersistenceManager {..} = forever $ do
       performBackup manager
 
 -- | Save a snapshot of the current database state
-saveSnapshot :: PersistenceManager -> Map ByteString KeyValue -> IO ()
+saveSnapshot :: PersistenceManager -> HashMap ByteString KeyValue -> IO ()
 saveSnapshot manager@PersistenceManager {..} dataMap = do
   now <- getCurrentTime
   version <- readTVarIO pmCurrentVersion
@@ -314,7 +330,7 @@ loadSnapshot PersistenceManager {..} filePath = do
             else return $ Left "Snapshot checksum verification failed"
 
 -- | Create a backup of the current database
-createBackup :: PersistenceManager -> Map ByteString KeyValue -> IO (Either String BackupInfo)
+createBackup :: PersistenceManager -> HashMap ByteString KeyValue -> IO (Either String BackupInfo)
 createBackup manager@PersistenceManager {..} dataMap = do
   now <- getCurrentTime
   version <- readTVarIO pmCurrentVersion
@@ -358,7 +374,7 @@ createBackup manager@PersistenceManager {..} dataMap = do
   return $ Right backupInfo
 
 -- | Restore database from backup
-restoreFromBackup :: PersistenceManager -> FilePath -> IO (Either String (Map ByteString KeyValue))
+restoreFromBackup :: PersistenceManager -> FilePath -> IO (Either String (HashMap ByteString KeyValue))
 restoreFromBackup manager backupPath = do
   result <- loadSnapshot manager backupPath
   case result of
@@ -421,11 +437,11 @@ verifySnapshotIntegrity Snapshot {..} =
    in calculatedChecksum == snapChecksum
 
 -- | Calculate checksum for data integrity
-calculateChecksum :: Map ByteString KeyValue -> Word32
+calculateChecksum :: HashMap ByteString KeyValue -> Word32
 calculateChecksum dataMap =
   -- Simplified checksum calculation
   -- In a real implementation, would use a proper hash function like CRC32
-  fromIntegral $ Map.size dataMap `mod` 2 ^ 32
+  fromIntegral $ HashMap.size dataMap `mod` 2 ^ 32
 
 -- | Serialize a key-value pair
 serializeKeyValue :: (ByteString, KeyValue) -> ByteString
@@ -472,15 +488,16 @@ deserializeKeyValue bs
                       { kvValue = value,
                         kvCreated = read "1970-01-01 00:00:00 UTC", -- Default timestamp
                         kvAccessed = read "1970-01-01 00:00:00 UTC", -- Default timestamp
-                        kvSize = valLen
+                        kvSize = valLen,
+                        kvExpires = Nothing -- No expiration for persisted data
                       }
                in Just (key, kv)
             else Nothing
 
 -- | Serialize an entire map
-serializeMap :: Map ByteString KeyValue -> ByteString
+serializeMap :: HashMap ByteString KeyValue -> ByteString
 serializeMap dataMap =
-  let entries = Map.toList dataMap
+  let entries = HashMap.toList dataMap
       serializedEntries = map serializeKeyValue entries
       count =
         BS.pack
@@ -492,7 +509,7 @@ serializeMap dataMap =
    in BS.concat $ count : serializedEntries
 
 -- | Deserialize an entire map
-deserializeMap :: ByteString -> Maybe (Map ByteString KeyValue)
+deserializeMap :: ByteString -> Maybe (HashMap ByteString KeyValue)
 deserializeMap bs
   | BS.length bs < 4 = Nothing
   | otherwise =
@@ -505,14 +522,14 @@ deserializeMap bs
        in deserializeEntries count remaining
 
 -- | Deserialize entries from serialized data
-deserializeEntries :: Int -> ByteString -> Maybe (Map ByteString KeyValue)
-deserializeEntries 0 _ = Just Map.empty
+deserializeEntries :: Int -> ByteString -> Maybe (HashMap ByteString KeyValue)
+deserializeEntries 0 _ = Just HashMap.empty
 deserializeEntries n bs = do
   (key, kv) <- deserializeKeyValue bs
   let entrySize = 8 + BS.length key + kvSize kv
       remaining = BS.drop entrySize bs
   rest <- deserializeEntries (n - 1) remaining
-  return $ Map.insert key kv rest
+  return $ HashMap.insert key kv rest
 
 -- | Ensure data directory exists
 ensureDataDirectory :: FilePath -> IO ()

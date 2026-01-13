@@ -18,6 +18,7 @@ module LensDB.Client
     ClientConfig (..),
     ClientError (..),
     OperationResult (..),
+    defaultClientConfig,
 
     -- * Client Operations
     connect,
@@ -27,6 +28,7 @@ module LensDB.Client
     -- * Database Operations
     get,
     set,
+    setEx,
     delete,
     exists,
     keys,
@@ -67,6 +69,7 @@ import LensDB.Protocol
     createGet,
     createPing,
     createSet,
+    createSetEx,
     createSuccessResponse,
     decodeMessage,
     decodeResponse,
@@ -278,6 +281,18 @@ get client key = do
 set :: LensDBClient -> ByteString -> ByteString -> IO (OperationResult ())
 set client key value = do
   let message = createSet key value
+  result <- executeOperation client message
+
+  case result of
+    Left err -> return $ Failure err
+    Right response -> case respStatus response of
+      StatusSuccess -> return $ Success ()
+      status -> return $ Failure $ ServerError status (respMessage response)
+
+-- | Set key-value pair with expiration (SETEX)
+setEx :: LensDBClient -> ByteString -> ByteString -> Word32 -> IO (OperationResult ())
+setEx client key value ttl = do
+  let message = createSetEx key value ttl
   result <- executeOperation client message
 
   case result of

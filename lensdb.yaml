@@ -1,36 +1,32 @@
 # LensDB Configuration File
 # This is the default configuration for LensDB
 
-# Server Configuration
-server:
-  host: "127.0.0.1"          # Server bind address
-  port: 8080                  # Server port
-  max_connections: 1000        # Maximum concurrent connections
-  connection_timeout: 300     # Connection timeout in seconds
-  buffer_size: 4096           # Network buffer size in bytes
-  workers: 4                  # Number of worker threads
+configServer:
+  serverHost: "127.0.0.1"          # Server bind address
+  serverPort: 8080                  # Server port
+  serverMaxConnections: 100000        # Maximum concurrent connections
+  serverConnectionTimeout: 300     # Connection timeout in seconds
+  serverBufferSize: 4096           # Network buffer size in bytes
+  serverWorkers: 4                  # Number of worker threads
 
-# Storage Configuration
-storage:
-  max_memory: "1GB"           # Maximum memory usage (e.g., "1GB", "512MB")
-  max_keys: 0                 # Maximum number of keys (0 = unlimited)
-  cleanup_interval: 300       # Cleanup interval in seconds
-  compaction_threshold: 0.8   # Compaction threshold (0.0-1.0)
-  eviction_policy: "LRU"       # Eviction policy ("LRU", "LFU", "FIFO")
+configStorage:
+  storageMaxMemory: "1GB"           # Maximum memory usage (e.g., "1GB", "512MB")
+  storageMaxKeys: 0                 # Maximum number of keys (0 = unlimited)
+  storageCleanupInterval: 300       # Cleanup interval in seconds
+  storageCompactionThreshold: 0.8   # Compaction threshold (0.0-1.0)
+  storageEvictionPolicy: "LRU"       # Eviction policy ("LRU", "LFU", "FIFO")
 
-# Logging Configuration
-logging:
-  level: "info"               # Log level ("debug", "info", "warn", "error")
-  file: ""                    # Log file path (empty = stdout)
-  max_size: "100MB"           # Maximum log file size
-  backup_count: 5             # Number of backup log files
-  format: "text"              # Log format ("json", "text")
+configLogging:
+  loggingLevel: "info"               # Log level ("debug", "info", "warn", "error")
+  loggingFile: ""                    # Log file path (empty = stdout)
+  loggingMaxSize: "100MB"           # Maximum log file size
+  loggingBackupCount: 5             # Number of backup log files
+  loggingFormat: "text"              # Log format ("json", "text")
 
-# Persistence Configuration
-persistence:
-  enabled: true               # Whether persistence is enabled
-  data_dir: "./data"          # Directory for data files
-  sync_interval: 60           # Sync interval in seconds
-  compression: false          # Whether to compress data files
-  backup_enabled: true        # Whether to enable backups
-  backup_interval: 3600       # Backup interval in seconds
+configPersistence:
+  persistenceEnabled: true               # Whether persistence is enabled
+  persistenceDataDir: "./data"          # Directory for data files
+  persistenceSyncInterval: 60           # Sync interval in seconds
+  persistenceCompression: false          # Whether to compress data files
+  persistenceBackupEnabled: true        # Whether to enable backups
+  persistenceBackupInterval: 3600       # Backup interval in seconds

@@ -207,9 +207,7 @@ openDatabase config = do
     -- Initialize statistics
     now <- getCurrentTime
     stats <-
-      atomically $
-        newTVar
-          DatabaseStats
+      newTVarIO DatabaseStats
             { dsReadOps = 0,
               dsWriteOps = 0,
               dsDeleteOps = 0,

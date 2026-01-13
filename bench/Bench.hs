@@ -15,7 +15,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as LBS
 import LensDB.Core
-import LensDB.Protocol (ProtocolMessage (..), ProtocolResponse (..), decodeMessage, encodeMessage, encodeResponse, createSet, createSuccessResponse)
+import LensDB.Protocol (ProtocolMessage (..), ProtocolResponse (..), createSet, createSuccessResponse, decodeMessage, encodeMessage, encodeResponse)
 import LensDB.Storage
 import System.Random
 

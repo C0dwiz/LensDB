@@ -36,6 +36,7 @@ module LensDB.Protocol
     createPing,
     createGet,
     createSet,
+    createSetEx,
     createDelete,
     createSuccessResponse,
     createErrorResponse,
@@ -43,12 +44,13 @@ module LensDB.Protocol
 where
 
 import Control.DeepSeq (NFData)
-import Control.Monad (unless, when)
-import Data.Binary (Binary (..), Get, Put, decodeOrFail, encode)
-import Data.Binary.Get (getByteString, getWord32be, getWord8, isEmpty)
+import Control.Monad (when)
+import Data.Binary (Binary (..), decodeOrFail, encode)
+import Data.Binary.Get (getByteString, getWord32be, getWord8)
 import Data.Binary.Put (putByteString, putWord32be, putWord8)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Lazy as LBS
 import Data.Word (Word32, Word8)
 import GHC.Generics (Generic)
@@ -81,6 +83,8 @@ data MessageType
     MsgClear
   | -- | Get storage statistics
     MsgStats
+  | -- | Set key with expiration (SETEX)
+    MsgSetEx
   deriving (Show, Eq, Generic, NFData, Enum)
 
 instance Binary MessageType where
@@ -97,6 +101,7 @@ instance Binary MessageType where
       6 -> return MsgSize
       7 -> return MsgClear
       8 -> return MsgStats
+      9 -> return MsgSetEx
       _ -> fail $ "Invalid message type: " ++ show word
 
 -- | Protocol message structure
@@ -240,9 +245,29 @@ instance Binary ProtocolResponse where
           respMessage = respMessage
         }
 
--- | Encode a protocol message to bytes
+-- | Encode a protocol message to bytes using Builder for efficiency
 encodeMessage :: ProtocolMessage -> LBS.ByteString
-encodeMessage = encode
+encodeMessage ProtocolMessage {..} =
+  BB.toLazyByteString $
+    BB.word32BE msgMagic
+      <> BB.word8 msgVersion
+      <> put msgType
+      <> BB.word32BE (fromIntegral $ BS.length msgKey)
+      <> BB.word32BE (fromIntegral $ BS.length msgValue)
+      <> BB.word32BE msgFlags
+      <> BB.byteString msgKey
+      <> BB.byteString msgValue
+  where
+    put MsgPing = BB.word8 0
+    put MsgGet = BB.word8 1
+    put MsgSet = BB.word8 2
+    put MsgDelete = BB.word8 3
+    put MsgExists = BB.word8 4
+    put MsgKeys = BB.word8 5
+    put MsgSize = BB.word8 6
+    put MsgClear = BB.word8 7
+    put MsgStats = BB.word8 8
+    put MsgSetEx = BB.word8 9
 
 -- | Decode a protocol message from bytes
 decodeMessage :: LBS.ByteString -> Either String ProtocolMessage
@@ -250,9 +275,25 @@ decodeMessage bs = case decodeOrFail bs of
   Left (_, _, err) -> Left err
   Right (_, _, msg) -> Right msg
 
--- | Encode a protocol response to bytes
+-- | Encode a protocol response to bytes using Builder for efficiency
 encodeResponse :: ProtocolResponse -> LBS.ByteString
-encodeResponse = encode
+encodeResponse ProtocolResponse {..} =
+  BB.toLazyByteString $
+    BB.word32BE respMagic
+      <> BB.word8 respVersion
+      <> put respStatus
+      <> BB.word32BE (fromIntegral $ BS.length respData)
+      <> BB.word32BE (fromIntegral $ BS.length respMessage)
+      <> BB.byteString respData
+      <> BB.byteString respMessage
+  where
+    put StatusSuccess = BB.word8 0
+    put StatusKeyNotFound = BB.word8 1
+    put StatusInvalidKey = BB.word8 2
+    put StatusStorageFull = BB.word8 3
+    put StatusInvalidMsg = BB.word8 4
+    put StatusInternalError = BB.word8 5
+    put StatusUnsupported = BB.word8 6
 
 -- | Decode a protocol response from bytes
 decodeResponse :: LBS.ByteString -> Either String ProtocolResponse
@@ -315,6 +356,18 @@ createSet key value =
       msgKey = key,
       msgValue = value,
       msgFlags = 0
+    }
+
+-- | Create a SETEX message (set with expiration)
+createSetEx :: ByteString -> ByteString -> Word32 -> ProtocolMessage
+createSetEx key value ttl =
+  ProtocolMessage
+    { msgMagic = magicNumber,
+      msgVersion = protocolVersion,
+      msgType = MsgSetEx,
+      msgKey = key,
+      msgValue = value,
+      msgFlags = ttl
     }
 
 -- | Create a DELETE message

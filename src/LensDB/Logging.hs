@@ -276,7 +276,8 @@ asyncLogWorker logger@Logger {..} = forever $ do
 
 -- | Flush the async queue
 flushQueue :: Logger -> IO ()
-flushQueue Logger {..} = do
+flushQueue logger = do
+  let Logger {..} = logger
   -- Get all records from queue
   records <- atomically $ do
     records <- readTVar lgQueue
@@ -284,7 +285,7 @@ flushQueue Logger {..} = do
     return records
 
   -- Write records in reverse order (newest first)
-  mapM_ (writeRecordSync (Logger lgConfig lgHandle lgBufferSize lgTotalWritten (error "unused") lgFlushTrigger)) (reverse records)
+  mapM_ (writeRecordSync logger) (reverse records)
 
 -- | Format a log record as text
 formatText :: LogRecord -> String
